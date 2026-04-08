@@ -140,7 +140,6 @@ with st.sidebar:
             "📊 Aperçu & Stats",
             "🔍 Qualité des données",
             "📈 Visualisations",
-            "🎨 DataViz Avancée",
             "🔧 Nettoyage",
             "🔄 Transformations",
             "📉 Analyse bivariée",
@@ -974,387 +973,6 @@ elif page == "🔄 Transformations":
     st.markdown('<div class="footer">DataClean Pro · <span>Grâce Delesth NGANGA</span></div>', unsafe_allow_html=True)
 
 
-# ══════════════════════════════════════════════════════════════
-# PAGE — DATAVIZ AVANCÉE  ← NOUVEAU
-# ══════════════════════════════════════════════════════════════
-elif page == "🎨 DataViz Avancée":
-    st.markdown('<p class="section-header">DataViz Avancée — Dashboard & graphiques enrichis</p>', unsafe_allow_html=True)
-    st.markdown('<div class="info-box">Créez des visualisations professionnelles, personnalisables et exportables. Idéal pour préparer vos rapports et dashboards.</div>', unsafe_allow_html=True)
-
-    viz_adv = st.selectbox("🎨 Choisir la visualisation", [
-        "📊 Dashboard KPIs automatique",
-        "🌡 Heatmap de corrélation annotée",
-        "📦 Boxplots multiples côte-à-côte",
-        "🌊 Graphique en aires empilées",
-        "🔵 Bubble chart (3 variables)",
-        "🌳 Treemap (hiérarchie)",
-        "🌞 Sunburst (hiérarchie imbriquée)",
-        "🎻 Violin plot comparatif",
-        "📉 Distribution cumulative (ECDF)",
-        "🔥 Heatmap temporelle (calendrier)",
-        "📈 Graphique en entonnoir (Funnel)",
-        "🗺 Graphique radar / araignée",
-        "📊 Waterfall / Cascade",
-        "🔗 Réseau de corrélations (graphe)",
-        "📐 Q-Q Plot multi-variables",
-    ])
-
-    # ── Dashboard KPIs ────────────────────────────────────────
-    if viz_adv == "📊 Dashboard KPIs automatique":
-        st.markdown('<p class="section-header">Dashboard KPIs automatique</p>', unsafe_allow_html=True)
-        if not num_cols:
-            st.info("Aucune colonne numérique détectée.")
-        else:
-            kpi_cols = st.multiselect("Colonnes KPI", num_cols, default=num_cols[:min(4,len(num_cols))], key='kpi_cols')
-            group_by_kpi = st.selectbox("Grouper par (optionnel)", ["Aucun"]+cat_cols, key='kpi_grp')
-            if kpi_cols:
-                # Row de métriques
-                cols_disp = st.columns(len(kpi_cols))
-                for i, c in enumerate(kpi_cols):
-                    with cols_disp[i]:
-                        v = df[c].mean()
-                        delta = df[c].std()
-                        st.metric(label=c, value=f"{v:,.2f}", delta=f"σ={delta:.2f}")
-                # Distributions
-                fig_dash = make_subplots(rows=1, cols=len(kpi_cols),
-                                         subplot_titles=kpi_cols)
-                colors = ['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24']
-                for i,c in enumerate(kpi_cols):
-                    fig_dash.add_histogram(x=df[c].dropna(), nbinsx=20,
-                                           marker_color=colors[i%4], opacity=0.8,
-                                           row=1, col=i+1, name=c)
-                fig_dash.update_layout(title="Distribution des KPIs", showlegend=False, **plotly_theme())
-                st.plotly_chart(fig_dash, use_container_width=True)
-
-                if group_by_kpi != "Aucun":
-                    for kc in kpi_cols:
-                        grp = df.groupby(group_by_kpi)[kc].mean().reset_index().sort_values(kc, ascending=False)
-                        fig_g = px.bar(grp, x=group_by_kpi, y=kc, color=kc,
-                                       color_continuous_scale=['#1e2230','#7c6ffd','#00e5a0'],
-                                       text=grp[kc].round(2))
-                        fig_g.update_layout(title=f"Moyenne de {kc} par {group_by_kpi}", **plotly_theme())
-                        st.plotly_chart(fig_g, use_container_width=True)
-
-    # ── Heatmap corrélation annotée ───────────────────────────
-    elif viz_adv == "🌡 Heatmap de corrélation annotée":
-        if len(num_cols) < 2:
-            st.warning("Il faut au moins 2 colonnes numériques.")
-        else:
-            sel_hm = st.multiselect("Colonnes", num_cols, default=num_cols[:min(8,len(num_cols))], key='hm_cols')
-            method_hm = st.selectbox("Méthode", ["pearson","spearman","kendall"], key='hm_meth')
-            palette   = st.selectbox("Palette", ["RdGn","RdBu","PuOr","viridis"], key='hm_pal')
-            pal_map   = {"RdGn":['#ef4444','#161920','#00e5a0'],
-                         "RdBu":['#ef4444','#ffffff','#1d4ed8'],
-                         "PuOr":['#7c3aed','#ffffff','#ea580c'],
-                         "viridis":['#0d0f14','#7c6ffd','#00e5a0']}
-            if len(sel_hm) >= 2:
-                corr = df[sel_hm].corr(method=method_hm).round(3)
-                fig_hm = px.imshow(corr, text_auto=True, aspect='auto', zmin=-1, zmax=1,
-                                   color_continuous_scale=pal_map[palette])
-                fig_hm.update_traces(textfont_size=11)
-                fig_hm.update_layout(title=f"Corrélation {method_hm} — annotations complètes", **plotly_theme())
-                st.plotly_chart(fig_hm, use_container_width=True)
-                # Table des paires significatives
-                alpha = st.slider("Seuil |r| significatif", 0.3, 0.95, 0.5, key='hm_alpha')
-                pairs = []
-                for i in range(len(corr.columns)):
-                    for j in range(i+1, len(corr.columns)):
-                        r = corr.iloc[i,j]
-                        if abs(r) >= alpha:
-                            pairs.append({'Var A': corr.columns[i], 'Var B': corr.columns[j],
-                                          'r': r, 'Force': interpret_r(r)})
-                if pairs:
-                    st.dataframe(pd.DataFrame(pairs).sort_values('r', key=abs, ascending=False), use_container_width=True, hide_index=True)
-
-    # ── Boxplots multiples ────────────────────────────────────
-    elif viz_adv == "📦 Boxplots multiples côte-à-côte":
-        if not num_cols: st.warning("Aucune colonne numérique.")
-        else:
-            sel_box = st.multiselect("Variables", num_cols, default=num_cols[:min(6,len(num_cols))], key='adv_box')
-            show_pts = st.checkbox("Afficher les points", False, key='adv_box_pts')
-            notch    = st.checkbox("Entailles (notch) — IC médiane", False, key='adv_notch')
-            if sel_box:
-                fig_b = go.Figure()
-                colors = ['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24','#38bdf8','#f472b6']
-                for i,c in enumerate(sel_box):
-                    fig_b.add_box(y=df[c].dropna(), name=c, marker_color=colors[i%6],
-                                  notched=notch, points="all" if show_pts else "outliers",
-                                  boxmean='sd')
-                fig_b.update_layout(title="Boxplots comparatifs (ligne = médiane, croix = moyenne)", **plotly_theme())
-                st.plotly_chart(fig_b, use_container_width=True)
-
-    # ── Aires empilées ────────────────────────────────────────
-    elif viz_adv == "🌊 Graphique en aires empilées":
-        date_cands = dt_cols+[c for c in df.columns if 'date' in c.lower() or 'time' in c.lower()]
-        if not date_cands or not num_cols:
-            st.warning("Il faut une colonne date et au moins une colonne numérique.")
-        else:
-            date_c = st.selectbox("Colonne date", date_cands, key='area_date')
-            val_cs = st.multiselect("Valeurs (séries)", num_cols, default=num_cols[:min(3,len(num_cols))], key='area_vals')
-            freq_a = st.selectbox("Fréquence", ["Jour (D)","Semaine (W)","Mois (ME)","Trimestre (QE)"], key='area_freq')
-            freq_m = {"Jour (D)":"D","Semaine (W)":"W","Mois (ME)":"ME","Trimestre (QE)":"QE"}
-            if val_cs:
-                try:
-                    tmp = df.copy()
-                    tmp[date_c] = pd.to_datetime(tmp[date_c], errors='coerce')
-                    tmp = tmp.dropna(subset=[date_c]).set_index(date_c)
-                    ts = tmp[val_cs].resample(freq_m[freq_a]).sum().reset_index()
-                    fig_area = px.area(ts, x=date_c, y=val_cs,
-                                       color_discrete_sequence=['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24'])
-                    fig_area.update_layout(title="Aires empilées temporelles", **plotly_theme())
-                    st.plotly_chart(fig_area, use_container_width=True)
-                except Exception as e: st.error(f"Erreur : {e}")
-
-    # ── Bubble chart ──────────────────────────────────────────
-    elif viz_adv == "🔵 Bubble chart (3 variables)":
-        if len(num_cols) < 3: st.warning("Il faut au moins 3 colonnes numériques.")
-        else:
-            c1,c2,c3,c4 = st.columns(4)
-            with c1: bx = st.selectbox("Axe X", num_cols, key='bub_x')
-            with c2: by = st.selectbox("Axe Y", [c for c in num_cols if c!=bx], key='bub_y')
-            with c3: bs = st.selectbox("Taille bulle", [c for c in num_cols if c not in [bx,by]], key='bub_s')
-            with c4: bc = st.selectbox("Couleur", ["Aucune"]+cat_cols+num_cols, key='bub_c')
-            fig_bub = px.scatter(df, x=bx, y=by, size=bs, size_max=50,
-                                 color=None if bc=="Aucune" else bc, opacity=0.7,
-                                 color_discrete_sequence=['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24'],
-                                 color_continuous_scale=['#1e2230','#7c6ffd','#00e5a0'],
-                                 hover_data=df.columns.tolist()[:5])
-            fig_bub.update_layout(title=f"Bubble chart : {bx} × {by} (taille={bs})", **plotly_theme())
-            st.plotly_chart(fig_bub, use_container_width=True)
-
-    # ── Treemap ───────────────────────────────────────────────
-    elif viz_adv == "🌳 Treemap (hiérarchie)":
-        if not cat_cols or not num_cols: st.warning("Colonnes catégorielles et numériques requises.")
-        else:
-            tree_path = st.multiselect("Chemin hiérarchique (du parent à l'enfant)", cat_cols, key='tree_path')
-            tree_val  = st.selectbox("Valeur (taille)", num_cols, key='tree_val')
-            tree_col  = st.selectbox("Couleur", ["Aucune"]+num_cols+cat_cols, key='tree_col')
-            if tree_path:
-                try:
-                    fig_tree = px.treemap(df, path=tree_path, values=tree_val,
-                                          color=None if tree_col=="Aucune" else tree_col,
-                                          color_continuous_scale=['#1e2230','#7c6ffd','#00e5a0'])
-                    fig_tree.update_layout(title="Treemap hiérarchique", **plotly_theme())
-                    st.plotly_chart(fig_tree, use_container_width=True)
-                except Exception as e: st.error(f"Erreur : {e}")
-
-    # ── Sunburst ──────────────────────────────────────────────
-    elif viz_adv == "🌞 Sunburst (hiérarchie imbriquée)":
-        if not cat_cols or not num_cols: st.warning("Colonnes catégorielles et numériques requises.")
-        else:
-            sun_path = st.multiselect("Chemin hiérarchique", cat_cols, key='sun_path')
-            sun_val  = st.selectbox("Valeur", num_cols, key='sun_val')
-            if sun_path:
-                try:
-                    fig_sun = px.sunburst(df, path=sun_path, values=sun_val,
-                                          color_discrete_sequence=['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24','#38bdf8'])
-                    fig_sun.update_layout(title="Sunburst chart", **plotly_theme())
-                    st.plotly_chart(fig_sun, use_container_width=True)
-                except Exception as e: st.error(f"Erreur : {e}")
-
-    # ── Violin comparatif ─────────────────────────────────────
-    elif viz_adv == "🎻 Violin plot comparatif":
-        if not num_cols: st.warning("Aucune colonne numérique.")
-        else:
-            viol_cols = st.multiselect("Variables", num_cols, default=num_cols[:min(4,len(num_cols))], key='viol_multi')
-            viol_grp  = st.selectbox("Grouper par", ["Aucun"]+cat_cols, key='viol_grp')
-            if viol_cols:
-                if viol_grp == "Aucun":
-                    df_melt = df[viol_cols].melt(var_name='Variable', value_name='Valeur').dropna()
-                    fig_viol = px.violin(df_melt, x='Variable', y='Valeur', box=True, points="outliers",
-                                         color='Variable', color_discrete_sequence=['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24'])
-                else:
-                    fig_viol = px.violin(df, x=viol_grp, y=viol_cols[0], color=viol_grp, box=True, points="outliers",
-                                         color_discrete_sequence=['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24'])
-                fig_viol.update_layout(title="Violin plot comparatif", **plotly_theme())
-                st.plotly_chart(fig_viol, use_container_width=True)
-
-    # ── ECDF ──────────────────────────────────────────────────
-    elif viz_adv == "📉 Distribution cumulative (ECDF)":
-        if not num_cols: st.warning("Aucune colonne numérique.")
-        else:
-            ecdf_cols = st.multiselect("Variables", num_cols, default=num_cols[:min(4,len(num_cols))], key='ecdf_cols')
-            if ecdf_cols:
-                fig_ecdf = go.Figure()
-                colors_ec = ['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24','#38bdf8']
-                for i,c in enumerate(ecdf_cols):
-                    s = df[c].dropna().sort_values()
-                    ecdf = np.arange(1, len(s)+1)/len(s)
-                    fig_ecdf.add_scatter(x=s, y=ecdf, mode='lines', name=c,
-                                         line=dict(color=colors_ec[i%5], width=2))
-                fig_ecdf.add_hline(y=0.5, line_dash='dash', line_color='#6b7280', annotation_text='Médiane')
-                fig_ecdf.add_hline(y=0.25, line_dash='dot', line_color='#6b7280', annotation_text='Q1')
-                fig_ecdf.add_hline(y=0.75, line_dash='dot', line_color='#6b7280', annotation_text='Q3')
-                fig_ecdf.update_layout(title="Distribution cumulative empirique (ECDF)",
-                                       xaxis_title="Valeur", yaxis_title="Probabilité cumulée",
-                                       **plotly_theme())
-                st.plotly_chart(fig_ecdf, use_container_width=True)
-
-    # ── Heatmap temporelle ────────────────────────────────────
-    elif viz_adv == "🔥 Heatmap temporelle (calendrier)":
-        date_cands = dt_cols+[c for c in df.columns if 'date' in c.lower() or 'time' in c.lower()]
-        if not date_cands or not num_cols:
-            st.warning("Il faut une colonne date et une colonne numérique.")
-        else:
-            ht_date = st.selectbox("Colonne date", date_cands, key='ht_date')
-            ht_val  = st.selectbox("Valeur", num_cols, key='ht_val')
-            ht_x    = st.selectbox("Axe X (granularité)", ["Mois","Semaine","Trimestre","Heure"], key='ht_x')
-            ht_y    = st.selectbox("Axe Y", ["Année","Jour de la semaine","Mois"], key='ht_y')
-            try:
-                tmp = df.copy()
-                tmp[ht_date] = pd.to_datetime(tmp[ht_date], errors='coerce')
-                tmp = tmp.dropna(subset=[ht_date])
-                x_map = {"Mois":"month","Semaine":"isocalendar().week","Trimestre":"quarter","Heure":"hour"}
-                y_map = {"Année":"year","Jour de la semaine":"dayofweek","Mois":"month"}
-
-                def safe_get(col, attr):
-                    if '().' in attr:
-                        parts = attr.split('.')
-                        return getattr(getattr(col.dt, parts[0][:-2])(), parts[1]).astype(int)
-                    return getattr(col.dt, attr)
-
-                tmp['_x'] = safe_get(tmp[ht_date], x_map[ht_x])
-                tmp['_y'] = safe_get(tmp[ht_date], y_map[ht_y])
-                pivot_ht  = tmp.groupby(['_y','_x'])[ht_val].mean().unstack(fill_value=0)
-                fig_ht = px.imshow(pivot_ht, text_auto=".0f", aspect='auto',
-                                   color_continuous_scale=['#161920','#7c6ffd','#00e5a0'])
-                fig_ht.update_layout(title=f"Heatmap temporelle — {ht_val} ({ht_y} × {ht_x})", **plotly_theme())
-                st.plotly_chart(fig_ht, use_container_width=True)
-            except Exception as e: st.error(f"Erreur : {e}")
-
-    # ── Funnel ────────────────────────────────────────────────
-    elif viz_adv == "📈 Graphique en entonnoir (Funnel)":
-        if not cat_cols or not num_cols: st.warning("Colonnes catégorielles et numériques requises.")
-        else:
-            fun_cat = st.selectbox("Étapes (catégorielle)", cat_cols, key='fun_cat')
-            fun_val = st.selectbox("Valeur", num_cols, key='fun_val')
-            fun_agg = st.selectbox("Agrégation", ["sum","mean","count"], key='fun_agg')
-            fun_df  = df.groupby(fun_cat)[fun_val].agg(fun_agg).reset_index().sort_values(fun_val, ascending=False)
-            fig_fun = px.funnel(fun_df, x=fun_val, y=fun_cat,
-                                color_discrete_sequence=['#7c6ffd'])
-            fig_fun.update_layout(title=f"Entonnoir : {fun_val} par {fun_cat}", **plotly_theme())
-            st.plotly_chart(fig_fun, use_container_width=True)
-
-    # ── Radar ─────────────────────────────────────────────────
-    elif viz_adv == "🗺 Graphique radar / araignée":
-        if not num_cols: st.warning("Aucune colonne numérique.")
-        else:
-            rad_cols = st.multiselect("Variables (axes du radar)", num_cols, default=num_cols[:min(6,len(num_cols))], key='rad_cols')
-            rad_grp  = st.selectbox("Grouper par (une ligne par groupe)", ["Aucun"]+cat_cols, key='rad_grp')
-            if rad_cols:
-                if rad_grp == "Aucun":
-                    means = df[rad_cols].mean().values
-                    fig_rad = go.Figure(go.Scatterpolar(r=means, theta=rad_cols,
-                                                        fill='toself', fillcolor='rgba(0,229,160,0.2)',
-                                                        line=dict(color='#00e5a0', width=2), name='Moyenne'))
-                else:
-                    top_grps = df[rad_grp].value_counts().head(6).index.tolist()
-                    fig_rad  = go.Figure()
-                    colors_r = ['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24','#38bdf8','#f472b6']
-                    for i,g in enumerate(top_grps):
-                        sub = df[df[rad_grp]==g][rad_cols].mean().values
-                        fig_rad.add_scatterpolar(r=sub, theta=rad_cols, fill='toself', name=str(g),
-                                                 line=dict(color=colors_r[i%6], width=2))
-                fig_rad.update_layout(polar=dict(bgcolor='#161920',
-                    radialaxis=dict(visible=True, gridcolor='#2a2f3d', color='#6b7280'),
-                    angularaxis=dict(gridcolor='#2a2f3d', color='#6b7280')),
-                    title="Graphique radar", paper_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='#e8eaf0'), margin=dict(t=60,b=40,l=40,r=40))
-                st.plotly_chart(fig_rad, use_container_width=True)
-
-    # ── Waterfall ─────────────────────────────────────────────
-    elif viz_adv == "📊 Waterfall / Cascade":
-        if not cat_cols or not num_cols: st.warning("Colonnes catégorielles et numériques requises.")
-        else:
-            wf_cat = st.selectbox("Catégories (étapes)", cat_cols, key='wf_cat')
-            wf_val = st.selectbox("Valeur", num_cols, key='wf_val')
-            wf_agg = st.selectbox("Agrégation", ["sum","mean"], key='wf_agg')
-            wf_df  = df.groupby(wf_cat)[wf_val].agg(wf_agg).reset_index()
-            vals   = wf_df[wf_val].values
-            colors_wf = ['#00e5a0' if v >= 0 else '#ef4444' for v in vals]
-            fig_wf = go.Figure(go.Waterfall(
-                name="", measure=["relative"]*len(vals),
-                x=wf_df[wf_cat].tolist(), y=vals,
-                connector=dict(line=dict(color='#2a2f3d')),
-                increasing=dict(marker_color='#00e5a0'),
-                decreasing=dict(marker_color='#ef4444'),
-            ))
-            fig_wf.update_layout(title=f"Waterfall : {wf_val} par {wf_cat}", **plotly_theme())
-            st.plotly_chart(fig_wf, use_container_width=True)
-
-    # ── Réseau de corrélations ────────────────────────────────
-    elif viz_adv == "🔗 Réseau de corrélations (graphe)":
-        if len(num_cols) < 3: st.warning("Il faut au moins 3 colonnes numériques.")
-        else:
-            net_cols = st.multiselect("Colonnes", num_cols, default=num_cols[:min(8,len(num_cols))], key='net_cols')
-            net_thr  = st.slider("Seuil |r| minimum", 0.1, 0.95, 0.5, key='net_thr')
-            net_meth = st.selectbox("Méthode", ["pearson","spearman"], key='net_meth')
-            if len(net_cols) >= 3:
-                corr_net = df[net_cols].corr(method=net_meth)
-                # Construire les arêtes
-                edges_x, edges_y, annotations = [], [], []
-                np.random.seed(42)
-                n = len(net_cols)
-                angles = np.linspace(0, 2*np.pi, n, endpoint=False)
-                pos = {c: (np.cos(a), np.sin(a)) for c,a in zip(net_cols, angles)}
-
-                fig_net = go.Figure()
-                for i,c1 in enumerate(net_cols):
-                    for j,c2 in enumerate(net_cols):
-                        if i < j:
-                            r = corr_net.loc[c1,c2]
-                            if abs(r) >= net_thr:
-                                x0,y0 = pos[c1]
-                                x1,y1 = pos[c2]
-                                color = '#00e5a0' if r > 0 else '#ef4444'
-                                width = abs(r)*5
-                                fig_net.add_scatter(x=[x0,x1,None], y=[y0,y1,None],
-                                                    mode='lines', line=dict(color=color, width=width),
-                                                    hoverinfo='skip', showlegend=False)
-
-                for c,(x,y) in pos.items():
-                    fig_net.add_scatter(x=[x], y=[y], mode='markers+text',
-                                        marker=dict(size=20, color='#7c6ffd', line=dict(color='#00e5a0', width=2)),
-                                        text=[c], textposition='top center',
-                                        textfont=dict(color='#e8eaf0', size=10),
-                                        name=c, showlegend=False)
-                fig_net.update_layout(title=f"Réseau de corrélations (|r| ≥ {net_thr}) — vert=positif, rouge=négatif",
-                                      xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                      yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                      **plotly_theme())
-                st.plotly_chart(fig_net, use_container_width=True)
-
-    # ── Q-Q Plot multi ────────────────────────────────────────
-    elif viz_adv == "📐 Q-Q Plot multi-variables":
-        if not num_cols: st.warning("Aucune colonne numérique.")
-        else:
-            qq_cols = st.multiselect("Variables", num_cols, default=num_cols[:min(4,len(num_cols))], key='qq_cols')
-            dist    = st.selectbox("Distribution de référence", ["norm","uniform","expon","lognorm"], key='qq_dist')
-            if qq_cols:
-                n_cols_qq = min(len(qq_cols), 2)
-                n_rows_qq = (len(qq_cols)+1)//2
-                fig_qq_m, axes = plt.subplots(n_rows_qq, n_cols_qq, figsize=(6*n_cols_qq, 4*n_rows_qq))
-                fig_qq_m.patch.set_facecolor('#0d0f14')
-                axes = np.array(axes).flatten() if len(qq_cols) > 1 else [axes]
-                for i,c in enumerate(qq_cols):
-                    ax = axes[i]
-                    ax.set_facecolor('#161920')
-                    s = df[c].dropna()
-                    stats.probplot(s, dist=dist, plot=ax)
-                    ax.get_lines()[0].set(color='#7c6ffd', markersize=3, alpha=0.6)
-                    ax.get_lines()[1].set(color='#00e5a0', linewidth=2)
-                    ax.set_title(c, color='#e8eaf0', fontsize=10)
-                    ax.tick_params(colors='#6b7280')
-                    for spine in ax.spines.values(): spine.set_color('#2a2f3d')
-                    ax.xaxis.label.set_color('#6b7280')
-                    ax.yaxis.label.set_color('#6b7280')
-                for j in range(len(qq_cols), len(axes)):
-                    axes[j].set_visible(False)
-                plt.tight_layout()
-                st.pyplot(fig_qq_m, use_container_width=True)
-
-    st.markdown('<div class="footer">DataClean Pro · <span>Grâce Delesth NGANGA</span></div>', unsafe_allow_html=True)
-
 
 # ══════════════════════════════════════════════════════════════
 elif page == "📉 Analyse bivariée":
@@ -1964,7 +1582,7 @@ elif page == "📚 Guide & Glossaire":
             ("Shapiro-Wilk","Normalité","Teste si une distribution est normale.","Recommandé pour n < 5000.","H₀ : distribution normale. p<0.05 → non normale.","Le plus puissant des tests de normalité."),
         ]
         for title, tag, desc, usage, hyp, interp in tests:
-            st.markdown(f'<div class="glossary-card"><div class="glossary-tag">{tag}</div><div class="glossary-title"> {title}</div><div class="glossary-body">{desc}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="glossary-card"><div class="glossary-tag">{tag}</div><div class="glossary-title">🧪 {title}</div><div class="glossary-body">{desc}</div></div>', unsafe_allow_html=True)
             with st.expander(f"Détails — {title}"):
                 st.markdown(f"**Quand ?** {usage} | **Hypothèse :** {hyp} | **Règle :** {interp}")
 
@@ -1978,7 +1596,7 @@ elif page == "📚 Guide & Glossaire":
             ("Z-score","Mise à l'échelle","Centre et réduit (μ=0, σ=1).",["Formule : (x-μ)/σ","Pour SVM, régression","Moins sensible aux outliers que Min-Max"]),
         ]
         for title, tag, desc, bullets in techniques:
-            st.markdown(f'<div class="glossary-card"><div class="glossary-tag">{tag}</div><div class="glossary-title"> {title}</div><div class="glossary-body">{desc}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="glossary-card"><div class="glossary-tag">{tag}</div><div class="glossary-title">🔧 {title}</div><div class="glossary-body">{desc}</div></div>', unsafe_allow_html=True)
             with st.expander(f"Détails — {title}"):
                 for b in bullets: st.markdown(f"• {b}")
 
@@ -1988,7 +1606,7 @@ elif page == "📚 Guide & Glossaire":
 # ══════════════════════════════════════════════════════════════
 # PAGE 11 — COURS DATA SCIENCE  ← NOUVEAU
 # ══════════════════════════════════════════════════════════════
-elif page == "🎓 Pré-requis":
+elif page == "🎓 Cours Data Science":
     st.markdown('<p class="section-header">Résumé de cours complet — Data Analyst & Data Scientist</p>', unsafe_allow_html=True)
     st.markdown('<div class="info-box">Ce cours couvre les notions fondamentales qu\'un bon Data Analyst ou Data Scientist doit maîtriser. Chaque chapitre est un résumé dense et actionnable.</div>', unsafe_allow_html=True)
 
@@ -2007,7 +1625,7 @@ elif page == "🎓 Pré-requis":
     ])
 
     if chapitre.startswith("1."):
-        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 1 — Fondements statistiques</div><div class="course-body">La statistique est la science de la collecte, l\'analyse et de l\'interprétation des données. Deux grandes branches :</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title">📐 Chapitre 1 — Fondements statistiques</div><div class="course-body">La statistique est la science de la collecte, l\'analyse et de l\'interprétation des données. Deux grandes branches :</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Statistiques descriptives","Paramètres de position","Paramètres de dispersion","Forme de la distribution"])
         with tabs[0]:
             st.markdown("""
@@ -2053,7 +1671,7 @@ elif page == "🎓 Pré-requis":
 """)
 
     elif chapitre.startswith("2."):
-        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 2 — Probabilités & Distributions</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title">🎲 Chapitre 2 — Probabilités & Distributions</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Probabilités de base","Distributions discrètes","Distributions continues","Théorème central limite"])
         with tabs[0]:
             st.markdown("""
@@ -2109,7 +1727,7 @@ elif page == "🎓 Pré-requis":
 """)
 
     elif chapitre.startswith("3."):
-        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 3 — Tests d\'hypothèses</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title">🧪 Chapitre 3 — Tests d\'hypothèses</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Logique des tests","Tests paramétriques","Tests non paramétriques","Erreurs & puissance"])
         with tabs[0]:
             st.markdown("""
@@ -2171,7 +1789,7 @@ elif page == "🎓 Pré-requis":
 """)
 
     elif chapitre.startswith("4."):
-        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 4 — Régression & Modélisation</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title">📈 Chapitre 4 — Régression & Modélisation</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Régression linéaire simple","Régression linéaire multiple","Régression logistique","Hypothèses & diagnostics"])
         with tabs[0]:
             st.markdown('<div class="course-formula">Y = β₀ + β₁X + ε</div>', unsafe_allow_html=True)
@@ -2224,7 +1842,7 @@ elif page == "🎓 Pré-requis":
 """)
 
     elif chapitre.startswith("5."):
-        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 5 — Machine Learning Supervisé</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title">🤖 Chapitre 5 — Machine Learning Supervisé</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Principes généraux","Classification","Régression ML","Ensembles"])
         with tabs[0]:
             st.markdown("""
@@ -2288,7 +1906,7 @@ elif page == "🎓 Pré-requis":
 """)
 
     elif chapitre.startswith("6."):
-        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 6 — Machine Learning Non Supervisé</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title">🔬 Chapitre 6 — Machine Learning Non Supervisé</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Clustering","Réduction de dimension","Règles d'association","Détection d'anomalies"])
         with tabs[0]:
             st.markdown("""
@@ -2354,7 +1972,7 @@ Utilisé en : recommandation, analyse du panier d'achat, médecine.
 """)
 
     elif chapitre.startswith("7."):
-        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 7 — Préparation & Feature Engineering</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title">⚙️ Chapitre 7 — Préparation & Feature Engineering</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Collecte & exploration","Nettoyage","Feature Engineering","Sélection de variables"])
         with tabs[0]:
             st.markdown("""
@@ -2436,7 +2054,7 @@ Utilisé en : recommandation, analyse du panier d'achat, médecine.
 """)
 
     elif chapitre.startswith("8."):
-        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 8 — Évaluation des modèles</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title">🎯 Chapitre 8 — Évaluation des modèles</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Métriques classification","Métriques régression","Validation & généralisation","Comparaison de modèles"])
         with tabs[0]:
             st.markdown("""
@@ -2464,10 +2082,10 @@ Réel 1    →    FN (FN)      VP (TP)
             st.markdown("""
 | Métrique | Formule | Interprétation |
 |---|---|---|
-| **MAE** | Σ\|yᵢ-ŷᵢ\|/n | Erreur moyenne absolue — robuste aux outliers |
+| **MAE** | Σ|yᵢ-ŷᵢ|/n | Erreur moyenne absolue — robuste aux outliers |
 | **MSE** | Σ(yᵢ-ŷᵢ)²/n | Pénalise les grandes erreurs |
 | **RMSE** | √MSE | Même unité que Y |
-| **MAPE** | Σ\|yᵢ-ŷᵢ\|/\|yᵢ\|/n | Erreur relative en % |
+| **MAPE** | Σ|yᵢ-ŷᵢ|/|yᵢ|/n | Erreur relative en % |
 | **R²** | 1-SS_res/SS_tot | % variance expliquée (0→1) |
 | **R² ajusté** | Pénalise les variables | Comparaison multi-variables |
 """)
@@ -2503,7 +2121,7 @@ Réel 1    →    FN (FN)      VP (TP)
             st.markdown("Le modèle avec le **plus petit AIC/BIC** est préféré.")
 
     elif chapitre.startswith("9."):
-        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 9 — SQL & Manipulation de données</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title">🗄️ Chapitre 9 — SQL & Manipulation de données</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["SQL Fondamentaux","Jointures SQL","Agrégations","Window Functions"])
         with tabs[0]:
             st.markdown("""
@@ -2571,7 +2189,7 @@ Réel 1    →    FN (FN)      VP (TP)
 """)
 
     elif chapitre.startswith("10."):
-        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 10 — Visualisation & Storytelling</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title">📊 Chapitre 10 — Visualisation & Storytelling</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Choisir le bon graphique","Principes de design","Storytelling data","Outils"])
         with tabs[0]:
             st.markdown("""
@@ -2650,7 +2268,7 @@ Réel 1    →    FN (FN)      VP (TP)
 """)
 
     elif chapitre.startswith("11."):
-        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 11 — Bonnes pratiques & Éthique</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title">⚖️ Chapitre 11 — Bonnes pratiques & Éthique</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Bonnes pratiques ML","Biais & équité","RGPD & confidentialité","Carrière Data"])
         with tabs[0]:
             st.markdown("""
