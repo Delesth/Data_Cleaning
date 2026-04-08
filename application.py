@@ -72,10 +72,18 @@ section[data-testid="stSidebar"]{background:var(--surface);border-right:1px soli
 def load_data(uploaded_file):
     name = uploaded_file.name.lower()
     if name.endswith(".csv"):
-        try:
-            df = pd.read_csv(uploaded_file, sep=None, engine='python')
-        except Exception:
-            df = pd.read_csv(uploaded_file)
+        encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'utf-8-sig']
+        df = None
+        for enc in encodings:
+            try:
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding=enc)
+                break
+            except Exception:
+                continue
+        if df is None:
+            st.error("Impossible de lire le fichier. Vérifiez l'encodage.")
+            return None
     elif name.endswith((".xls", ".xlsx")):
         xl = pd.ExcelFile(uploaded_file)
         sheet = xl.sheet_names[0] if len(xl.sheet_names)==1 else st.sidebar.selectbox("Feuille", xl.sheet_names)
@@ -132,6 +140,7 @@ with st.sidebar:
             "📊 Aperçu & Stats",
             "🔍 Qualité des données",
             "📈 Visualisations",
+            "🎨 DataViz Avancée",
             "🔧 Nettoyage",
             "🔄 Transformations",
             "📉 Analyse bivariée",
@@ -686,13 +695,667 @@ elif page == "🔄 Transformations":
                 st.session_state.df = df_work; df = df_work
                 st.session_state.cleaning_log.append(f"Nettoyage texte ({txt_col})"); st.success("Nettoyé.")
 
+    # ── NOUVELLES TRANSFORMATIONS ─────────────────────────────
+
+    with st.expander("🔀 Colonne conditionnelle (IF / ELSE)"):
+        st.markdown('<div class="info-box"><b>Équivalent Power Query : Colonne conditionnelle</b><br>Crée une nouvelle colonne selon des règles SI/SINON. Ex : si dateClo est vide → "Ouvert" sinon "Fermé".</div>', unsafe_allow_html=True)
+        cond_new_col = st.text_input("Nom de la nouvelle colonne", key='cond_col_name', placeholder="ex: Statut")
+        cond_source  = st.selectbox("Colonne source", df.columns.tolist(), key='cond_source')
+        cond_type    = st.radio("Type de condition", ["Est vide (NaN/null)", "Contient", "Égal à", "Supérieur à", "Inférieur à", "Compris entre"], horizontal=True, key='cond_type')
+
+        col1, col2 = st.columns(2)
+        with col1:
+            cond_val1 = st.text_input("Valeur 1 (seuil / texte recherché)", key='cond_val1', placeholder="ex: 0 ou Ouvert")
+        with col2:
+            cond_val2 = st.text_input("Valeur 2 (borne sup. si 'Compris entre')", key='cond_val2')
+
+        col3, col4 = st.columns(2)
+        with col3:
+            then_val = st.text_input("Valeur SI condition vraie (THEN)", key='cond_then', placeholder="ex: Ouvert")
+        with col4:
+            else_val = st.text_input("Valeur SI condition fausse (ELSE)", key='cond_else', placeholder="ex: Fermé")
+
+        # Multi-règles (IF / ELIF / ELSE)
+        st.markdown("**Règles supplémentaires (optionnel — équivalent SINON SI)**")
+        extra_rules_raw = st.text_area(
+            "Format : condition | valeur_si_vrai (une par ligne)\nEx : df['montant'] > 1000 | Grand compte",
+            key='cond_extra', height=80
+        )
+
+        if st.button("✅ Créer la colonne conditionnelle") and cond_new_col:
+            try:
+                df_work = st.session_state.df.copy()
+                col = df_work[cond_source]
+
+                # Condition principale
+                if cond_type == "Est vide (NaN/null)":
+                    mask = col.isnull() | (col.astype(str).str.strip() == '') | (col.astype(str).str.strip().str.lower() == 'nan')
+                elif cond_type == "Contient":
+                    mask = col.astype(str).str.contains(cond_val1, case=False, na=False)
+                elif cond_type == "Égal à":
+                    try: mask = col == float(cond_val1)
+                    except: mask = col.astype(str) == cond_val1
+                elif cond_type == "Supérieur à":
+                    mask = pd.to_numeric(col, errors='coerce') > float(cond_val1)
+                elif cond_type == "Inférieur à":
+                    mask = pd.to_numeric(col, errors='coerce') < float(cond_val1)
+                elif cond_type == "Compris entre":
+                    num_col = pd.to_numeric(col, errors='coerce')
+                    mask = (num_col >= float(cond_val1)) & (num_col <= float(cond_val2))
+                else:
+                    mask = pd.Series([False]*len(df_work))
+
+                result = np.where(mask, then_val, else_val)
+
+                # Règles supplémentaires (SINON SI)
+                if extra_rules_raw.strip():
+                    for rule_line in extra_rules_raw.strip().split('\n'):
+                        if '|' in rule_line:
+                            rule_expr, rule_val = rule_line.split('|', 1)
+                            try:
+                                rule_mask = eval(rule_expr.strip(), {"df": df_work, "np": np, "pd": pd})
+                                result = np.where(rule_mask & ~mask, rule_val.strip(), result)
+                            except Exception as re:
+                                st.warning(f"Règle ignorée : {rule_expr.strip()} → {re}")
+
+                df_work[cond_new_col] = result
+                st.session_state.df = df_work; df = df_work
+                msg = f"Colonne conditionnelle '{cond_new_col}' créée"
+                st.session_state.cleaning_log.append(msg)
+                st.success(msg)
+                st.dataframe(df_work[[cond_source, cond_new_col]].head(10), use_container_width=True)
+            except Exception as e:
+                st.error(f"Erreur : {e}")
+
+    with st.expander("🔁 Remplacer des valeurs (Find & Replace)"):
+        st.markdown('<div class="info-box"><b>Équivalent Power Query : Remplacer les valeurs</b><br>Remplace une valeur spécifique par une autre dans une colonne.</div>', unsafe_allow_html=True)
+        rep_col  = st.selectbox("Colonne", df.columns.tolist(), key='rep_col')
+        rep_mode = st.radio("Mode", ["Valeur exacte","Contient (regex)"], horizontal=True, key='rep_mode')
+        rep_from = st.text_input("Valeur à remplacer", key='rep_from', placeholder="ex: N/A ou \\bNA\\b")
+        rep_to   = st.text_input("Remplacer par", key='rep_to', placeholder="ex: vide → laisser blanc")
+        rep_case = st.checkbox("Respecter la casse", True, key='rep_case')
+        if st.button("Remplacer") and rep_from:
+            try:
+                df_work = st.session_state.df.copy()
+                is_regex = (rep_mode == "Contient (regex)")
+                replace_to = rep_to if rep_to else np.nan
+                df_work[rep_col] = df_work[rep_col].astype(str).str.replace(
+                    rep_from, str(replace_to) if rep_to else '', regex=is_regex, case=rep_case
+                )
+                if not rep_to:
+                    df_work[rep_col] = df_work[rep_col].replace('', np.nan)
+                st.session_state.df = df_work; df = df_work
+                msg = f"Remplacement dans {rep_col} : '{rep_from}' → '{rep_to}'"
+                st.session_state.cleaning_log.append(msg); st.success(msg)
+            except Exception as e:
+                st.error(f"Erreur : {e}")
+
+    with st.expander("✂️ Découper / Extraire du texte"):
+        st.markdown('<div class="info-box"><b>Équivalent Power Query : Extraire / Fractionner</b><br>Extrait une partie du texte par position, délimiteur, ou motif.</div>', unsafe_allow_html=True)
+        split_col = st.selectbox("Colonne texte", df.columns.tolist(), key='split_col')
+        split_mode = st.radio("Mode", ["Positions (début:fin)","Délimiteur (split)","N premiers caractères","N derniers caractères","Extraire entre deux textes"], horizontal=False, key='split_mode')
+
+        if split_mode == "Positions (début:fin)":
+            c1,c2 = st.columns(2)
+            with c1: pos_start = st.number_input("Position début (0=premier)", min_value=0, value=0, key='pos_start')
+            with c2: pos_end   = st.number_input("Position fin (-1=jusqu'à la fin)", value=-1, key='pos_end')
+            new_split_col = st.text_input("Nouveau nom de colonne", value=f"{split_col}_extrait", key='split_new1')
+            if st.button("Extraire par position"):
+                df_work = st.session_state.df.copy()
+                end = None if pos_end == -1 else int(pos_end)
+                df_work[new_split_col] = df_work[split_col].astype(str).str[int(pos_start):end]
+                st.session_state.df = df_work; df = df_work
+                st.session_state.cleaning_log.append(f"Extraction position [{pos_start}:{pos_end}] sur {split_col}"); st.success("Extrait.")
+
+        elif split_mode == "Délimiteur (split)":
+            delim = st.text_input("Délimiteur", value=";", key='delim')
+            part  = st.number_input("Numéro de partie (0 = première)", min_value=0, value=0, key='split_part')
+            new_split_col = st.text_input("Nouveau nom", value=f"{split_col}_part{part}", key='split_new2')
+            if st.button("Fractionner"):
+                try:
+                    df_work = st.session_state.df.copy()
+                    df_work[new_split_col] = df_work[split_col].astype(str).str.split(delim).str[int(part)]
+                    st.session_state.df = df_work; df = df_work
+                    st.session_state.cleaning_log.append(f"Split '{delim}' partie {part} sur {split_col}"); st.success("Fractionné.")
+                except Exception as e: st.error(f"Erreur : {e}")
+
+        elif split_mode == "N premiers caractères":
+            n_chars = st.number_input("Nombre de caractères", min_value=1, value=3, key='n_first')
+            new_split_col = st.text_input("Nouveau nom", value=f"{split_col}_{n_chars}premiers", key='split_new3')
+            if st.button("Extraire premiers"):
+                df_work = st.session_state.df.copy()
+                df_work[new_split_col] = df_work[split_col].astype(str).str[:int(n_chars)]
+                st.session_state.df = df_work; df = df_work
+                st.session_state.cleaning_log.append(f"{n_chars} premiers caractères de {split_col}"); st.success("Extrait.")
+
+        elif split_mode == "N derniers caractères":
+            n_chars = st.number_input("Nombre de caractères", min_value=1, value=3, key='n_last')
+            new_split_col = st.text_input("Nouveau nom", value=f"{split_col}_{n_chars}derniers", key='split_new4')
+            if st.button("Extraire derniers"):
+                df_work = st.session_state.df.copy()
+                df_work[new_split_col] = df_work[split_col].astype(str).str[-int(n_chars):]
+                st.session_state.df = df_work; df = df_work
+                st.session_state.cleaning_log.append(f"{n_chars} derniers caractères de {split_col}"); st.success("Extrait.")
+
+        elif split_mode == "Extraire entre deux textes":
+            c1,c2 = st.columns(2)
+            with c1: txt_before = st.text_input("Texte avant", key='txt_before', placeholder="ex: (")
+            with c2: txt_after  = st.text_input("Texte après", key='txt_after', placeholder="ex: )")
+            new_split_col = st.text_input("Nouveau nom", value=f"{split_col}_between", key='split_new5')
+            if st.button("Extraire entre") and txt_before and txt_after:
+                try:
+                    import re as re_mod
+                    pattern = re_mod.escape(txt_before) + r'(.*?)' + re_mod.escape(txt_after)
+                    df_work = st.session_state.df.copy()
+                    df_work[new_split_col] = df_work[split_col].astype(str).str.extract(pattern, expand=False)
+                    st.session_state.df = df_work; df = df_work
+                    st.session_state.cleaning_log.append(f"Extraction entre '{txt_before}' et '{txt_after}' sur {split_col}"); st.success("Extrait.")
+                except Exception as e: st.error(f"Erreur : {e}")
+
+    with st.expander("🔢 Discrétisation / Binning (découpage en intervalles)"):
+        st.markdown('<div class="info-box"><b>Équivalent Power Query : Colonne à partir d\'exemples / regroupement</b><br>Transforme une variable numérique continue en catégories (tranches d\'âge, niveaux, etc.)</div>', unsafe_allow_html=True)
+        if num_cols:
+            bin_col  = st.selectbox("Colonne numérique", num_cols, key='bin_col')
+            bin_mode = st.radio("Mode", ["Intervalles égaux (equal-width)","Quantiles (equal-frequency)","Bornes personnalisées"], horizontal=True, key='bin_mode')
+            bin_new  = st.text_input("Nom de la nouvelle colonne", value=f"{bin_col}_tranche", key='bin_new')
+
+            if bin_mode in ["Intervalles égaux (equal-width)", "Quantiles (equal-frequency)"]:
+                n_bins = st.slider("Nombre de tranches", 2, 20, 5, key='n_bins')
+                bin_labels_raw = st.text_input("Labels personnalisés (optionnel, séparés par virgules)", key='bin_labels')
+            else:
+                bins_raw   = st.text_input("Bornes (ex: 0,18,35,60,100)", key='bins_raw')
+                labels_raw = st.text_input("Labels (ex: Mineur,Jeune,Adulte,Senior)", key='labels_raw')
+
+            if st.button("Discrétiser"):
+                try:
+                    df_work = st.session_state.df.copy()
+                    if bin_mode == "Intervalles égaux (equal-width)":
+                        lbl = [l.strip() for l in bin_labels_raw.split(',')] if bin_labels_raw else None
+                        df_work[bin_new] = pd.cut(df_work[bin_col], bins=n_bins, labels=lbl)
+                    elif bin_mode == "Quantiles (equal-frequency)":
+                        lbl = [l.strip() for l in bin_labels_raw.split(',')] if bin_labels_raw else None
+                        df_work[bin_new] = pd.qcut(df_work[bin_col], q=n_bins, labels=lbl, duplicates='drop')
+                    else:
+                        bornes = [float(x.strip()) for x in bins_raw.split(',')]
+                        lbl    = [l.strip() for l in labels_raw.split(',')] if labels_raw else None
+                        df_work[bin_new] = pd.cut(df_work[bin_col], bins=bornes, labels=lbl)
+                    st.session_state.df = df_work; df = df_work
+                    msg = f"Discrétisation ({bin_mode}) : {bin_col} → {bin_new}"
+                    st.session_state.cleaning_log.append(msg); st.success(msg)
+                    vc = df_work[bin_new].value_counts().reset_index()
+                    vc.columns = ['Tranche', 'Count']
+                    fig_bin = px.bar(vc, x='Tranche', y='Count', color='Count',
+                                     color_continuous_scale=['#1e2230','#7c6ffd','#00e5a0'], text='Count')
+                    fig_bin.update_layout(title=f"Répartition des tranches — {bin_new}", **plotly_theme())
+                    st.plotly_chart(fig_bin, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Erreur : {e}")
+
+    with st.expander("📐 Transformation mathématique"):
+        st.markdown('<div class="info-box">Applique une transformation mathématique sur une colonne numérique (log, sqrt, carré, inverse...).</div>', unsafe_allow_html=True)
+        if num_cols:
+            math_col  = st.selectbox("Colonne", num_cols, key='math_col')
+            math_func = st.selectbox("Transformation", [
+                "Log naturel ln(x)","Log base 10","Racine carrée √x","Carré x²","Cube x³",
+                "Inverse 1/x","Valeur absolue |x|","Exponentielle eˣ","Arrondir"
+            ], key='math_func')
+            math_new  = st.text_input("Nom de la nouvelle colonne", value=f"{math_col}_transf", key='math_new')
+            decimals  = st.number_input("Décimales (pour Arrondir)", min_value=0, max_value=10, value=2, key='math_dec')
+            if st.button("Appliquer la transformation"):
+                try:
+                    df_work = st.session_state.df.copy()
+                    s = df_work[math_col]
+                    if math_func == "Log naturel ln(x)": df_work[math_new] = np.log(s.replace(0, np.nan))
+                    elif math_func == "Log base 10":     df_work[math_new] = np.log10(s.replace(0, np.nan))
+                    elif math_func == "Racine carrée √x": df_work[math_new] = np.sqrt(s.clip(lower=0))
+                    elif math_func == "Carré x²":        df_work[math_new] = s ** 2
+                    elif math_func == "Cube x³":         df_work[math_new] = s ** 3
+                    elif math_func == "Inverse 1/x":     df_work[math_new] = 1 / s.replace(0, np.nan)
+                    elif math_func == "Valeur absolue |x|": df_work[math_new] = s.abs()
+                    elif math_func == "Exponentielle eˣ": df_work[math_new] = np.exp(s)
+                    elif math_func == "Arrondir":        df_work[math_new] = s.round(int(decimals))
+                    st.session_state.df = df_work; df = df_work
+                    msg = f"Transformation {math_func} sur {math_col} → {math_new}"
+                    st.session_state.cleaning_log.append(msg); st.success(msg)
+                except Exception as e: st.error(f"Erreur : {e}")
+
+    with st.expander("🔗 Concaténer des colonnes texte"):
+        st.markdown('<div class="info-box"><b>Équivalent Power Query : Fusionner des colonnes</b><br>Combine plusieurs colonnes en une seule chaîne de texte.</div>', unsafe_allow_html=True)
+        concat_cols = st.multiselect("Colonnes à fusionner (dans l'ordre)", df.columns.tolist(), key='concat_text_cols')
+        concat_sep  = st.text_input("Séparateur", value=" ", key='concat_sep', placeholder="ex: espace, _, -")
+        concat_new  = st.text_input("Nom de la nouvelle colonne", value="colonne_fusionnée", key='concat_text_new')
+        if st.button("Fusionner") and len(concat_cols) >= 2:
+            try:
+                df_work = st.session_state.df.copy()
+                df_work[concat_new] = df_work[concat_cols[0]].astype(str)
+                for c in concat_cols[1:]:
+                    df_work[concat_new] = df_work[concat_new] + concat_sep + df_work[c].astype(str)
+                st.session_state.df = df_work; df = df_work
+                msg = f"Fusion colonnes {concat_cols} → {concat_new}"
+                st.session_state.cleaning_log.append(msg); st.success(msg)
+                st.dataframe(df_work[[*concat_cols, concat_new]].head(5), use_container_width=True)
+            except Exception as e: st.error(f"Erreur : {e}")
+
+    with st.expander("🔄 Transposer lignes ↔ colonnes"):
+        st.markdown('<div class="info-box">Transpose le dataframe : les lignes deviennent des colonnes et inversement.</div>', unsafe_allow_html=True)
+        use_first_as_header = st.checkbox("Utiliser la première ligne comme entête", True, key='transp_header')
+        if st.button("Transposer le dataframe"):
+            try:
+                df_work = st.session_state.df.copy()
+                df_transposed = df_work.T
+                if use_first_as_header:
+                    df_transposed.columns = df_transposed.iloc[0]
+                    df_transposed = df_transposed[1:].reset_index()
+                else:
+                    df_transposed = df_transposed.reset_index()
+                st.session_state.df = df_transposed; df = df_transposed
+                msg = f"Transposition : {df_work.shape} → {df_transposed.shape}"
+                st.session_state.cleaning_log.append(msg); st.success(msg)
+                st.dataframe(df_transposed.head(5), use_container_width=True)
+            except Exception as e: st.error(f"Erreur : {e}")
+
+    with st.expander("📊 Ranking / Classement"):
+        st.markdown('<div class="info-box">Ajoute une colonne de rang basée sur une variable numérique. Utile pour créer des tops ou des classements.</div>', unsafe_allow_html=True)
+        if num_cols:
+            rank_col    = st.selectbox("Colonne à classer", num_cols, key='rank_col')
+            rank_method = st.radio("Méthode", ["average","min","max","first","dense"], horizontal=True, key='rank_method')
+            rank_asc    = st.checkbox("Ordre croissant", False, key='rank_asc')
+            rank_new    = st.text_input("Nom de la colonne rang", value=f"{rank_col}_rang", key='rank_new')
+            if st.button("Créer le classement"):
+                df_work = st.session_state.df.copy()
+                df_work[rank_new] = df_work[rank_col].rank(method=rank_method, ascending=rank_asc).astype(int)
+                st.session_state.df = df_work; df = df_work
+                msg = f"Ranking {rank_col} → {rank_new}"
+                st.session_state.cleaning_log.append(msg); st.success(msg)
+                st.dataframe(df_work[[rank_col, rank_new]].sort_values(rank_new).head(10), use_container_width=True)
+
     st.markdown("**Aperçu du dataframe transformé**")
     st.dataframe(st.session_state.df.head(10), use_container_width=True)
     st.markdown('<div class="footer">DataClean Pro · <span>Grâce Delesth NGANGA</span></div>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════
-# PAGE 6 — ANALYSE BIVARIÉE
+# PAGE — DATAVIZ AVANCÉE  ← NOUVEAU
+# ══════════════════════════════════════════════════════════════
+elif page == "🎨 DataViz Avancée":
+    st.markdown('<p class="section-header">DataViz Avancée — Dashboard & graphiques enrichis</p>', unsafe_allow_html=True)
+    st.markdown('<div class="info-box">Créez des visualisations professionnelles, personnalisables et exportables. Idéal pour préparer vos rapports et dashboards.</div>', unsafe_allow_html=True)
+
+    viz_adv = st.selectbox("🎨 Choisir la visualisation", [
+        "📊 Dashboard KPIs automatique",
+        "🌡 Heatmap de corrélation annotée",
+        "📦 Boxplots multiples côte-à-côte",
+        "🌊 Graphique en aires empilées",
+        "🔵 Bubble chart (3 variables)",
+        "🌳 Treemap (hiérarchie)",
+        "🌞 Sunburst (hiérarchie imbriquée)",
+        "🎻 Violin plot comparatif",
+        "📉 Distribution cumulative (ECDF)",
+        "🔥 Heatmap temporelle (calendrier)",
+        "📈 Graphique en entonnoir (Funnel)",
+        "🗺 Graphique radar / araignée",
+        "📊 Waterfall / Cascade",
+        "🔗 Réseau de corrélations (graphe)",
+        "📐 Q-Q Plot multi-variables",
+    ])
+
+    # ── Dashboard KPIs ────────────────────────────────────────
+    if viz_adv == "📊 Dashboard KPIs automatique":
+        st.markdown('<p class="section-header">Dashboard KPIs automatique</p>', unsafe_allow_html=True)
+        if not num_cols:
+            st.info("Aucune colonne numérique détectée.")
+        else:
+            kpi_cols = st.multiselect("Colonnes KPI", num_cols, default=num_cols[:min(4,len(num_cols))], key='kpi_cols')
+            group_by_kpi = st.selectbox("Grouper par (optionnel)", ["Aucun"]+cat_cols, key='kpi_grp')
+            if kpi_cols:
+                # Row de métriques
+                cols_disp = st.columns(len(kpi_cols))
+                for i, c in enumerate(kpi_cols):
+                    with cols_disp[i]:
+                        v = df[c].mean()
+                        delta = df[c].std()
+                        st.metric(label=c, value=f"{v:,.2f}", delta=f"σ={delta:.2f}")
+                # Distributions
+                fig_dash = make_subplots(rows=1, cols=len(kpi_cols),
+                                         subplot_titles=kpi_cols)
+                colors = ['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24']
+                for i,c in enumerate(kpi_cols):
+                    fig_dash.add_histogram(x=df[c].dropna(), nbinsx=20,
+                                           marker_color=colors[i%4], opacity=0.8,
+                                           row=1, col=i+1, name=c)
+                fig_dash.update_layout(title="Distribution des KPIs", showlegend=False, **plotly_theme())
+                st.plotly_chart(fig_dash, use_container_width=True)
+
+                if group_by_kpi != "Aucun":
+                    for kc in kpi_cols:
+                        grp = df.groupby(group_by_kpi)[kc].mean().reset_index().sort_values(kc, ascending=False)
+                        fig_g = px.bar(grp, x=group_by_kpi, y=kc, color=kc,
+                                       color_continuous_scale=['#1e2230','#7c6ffd','#00e5a0'],
+                                       text=grp[kc].round(2))
+                        fig_g.update_layout(title=f"Moyenne de {kc} par {group_by_kpi}", **plotly_theme())
+                        st.plotly_chart(fig_g, use_container_width=True)
+
+    # ── Heatmap corrélation annotée ───────────────────────────
+    elif viz_adv == "🌡 Heatmap de corrélation annotée":
+        if len(num_cols) < 2:
+            st.warning("Il faut au moins 2 colonnes numériques.")
+        else:
+            sel_hm = st.multiselect("Colonnes", num_cols, default=num_cols[:min(8,len(num_cols))], key='hm_cols')
+            method_hm = st.selectbox("Méthode", ["pearson","spearman","kendall"], key='hm_meth')
+            palette   = st.selectbox("Palette", ["RdGn","RdBu","PuOr","viridis"], key='hm_pal')
+            pal_map   = {"RdGn":['#ef4444','#161920','#00e5a0'],
+                         "RdBu":['#ef4444','#ffffff','#1d4ed8'],
+                         "PuOr":['#7c3aed','#ffffff','#ea580c'],
+                         "viridis":['#0d0f14','#7c6ffd','#00e5a0']}
+            if len(sel_hm) >= 2:
+                corr = df[sel_hm].corr(method=method_hm).round(3)
+                fig_hm = px.imshow(corr, text_auto=True, aspect='auto', zmin=-1, zmax=1,
+                                   color_continuous_scale=pal_map[palette])
+                fig_hm.update_traces(textfont_size=11)
+                fig_hm.update_layout(title=f"Corrélation {method_hm} — annotations complètes", **plotly_theme())
+                st.plotly_chart(fig_hm, use_container_width=True)
+                # Table des paires significatives
+                alpha = st.slider("Seuil |r| significatif", 0.3, 0.95, 0.5, key='hm_alpha')
+                pairs = []
+                for i in range(len(corr.columns)):
+                    for j in range(i+1, len(corr.columns)):
+                        r = corr.iloc[i,j]
+                        if abs(r) >= alpha:
+                            pairs.append({'Var A': corr.columns[i], 'Var B': corr.columns[j],
+                                          'r': r, 'Force': interpret_r(r)})
+                if pairs:
+                    st.dataframe(pd.DataFrame(pairs).sort_values('r', key=abs, ascending=False), use_container_width=True, hide_index=True)
+
+    # ── Boxplots multiples ────────────────────────────────────
+    elif viz_adv == "📦 Boxplots multiples côte-à-côte":
+        if not num_cols: st.warning("Aucune colonne numérique.")
+        else:
+            sel_box = st.multiselect("Variables", num_cols, default=num_cols[:min(6,len(num_cols))], key='adv_box')
+            show_pts = st.checkbox("Afficher les points", False, key='adv_box_pts')
+            notch    = st.checkbox("Entailles (notch) — IC médiane", False, key='adv_notch')
+            if sel_box:
+                fig_b = go.Figure()
+                colors = ['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24','#38bdf8','#f472b6']
+                for i,c in enumerate(sel_box):
+                    fig_b.add_box(y=df[c].dropna(), name=c, marker_color=colors[i%6],
+                                  notched=notch, points="all" if show_pts else "outliers",
+                                  boxmean='sd')
+                fig_b.update_layout(title="Boxplots comparatifs (ligne = médiane, croix = moyenne)", **plotly_theme())
+                st.plotly_chart(fig_b, use_container_width=True)
+
+    # ── Aires empilées ────────────────────────────────────────
+    elif viz_adv == "🌊 Graphique en aires empilées":
+        date_cands = dt_cols+[c for c in df.columns if 'date' in c.lower() or 'time' in c.lower()]
+        if not date_cands or not num_cols:
+            st.warning("Il faut une colonne date et au moins une colonne numérique.")
+        else:
+            date_c = st.selectbox("Colonne date", date_cands, key='area_date')
+            val_cs = st.multiselect("Valeurs (séries)", num_cols, default=num_cols[:min(3,len(num_cols))], key='area_vals')
+            freq_a = st.selectbox("Fréquence", ["Jour (D)","Semaine (W)","Mois (ME)","Trimestre (QE)"], key='area_freq')
+            freq_m = {"Jour (D)":"D","Semaine (W)":"W","Mois (ME)":"ME","Trimestre (QE)":"QE"}
+            if val_cs:
+                try:
+                    tmp = df.copy()
+                    tmp[date_c] = pd.to_datetime(tmp[date_c], errors='coerce')
+                    tmp = tmp.dropna(subset=[date_c]).set_index(date_c)
+                    ts = tmp[val_cs].resample(freq_m[freq_a]).sum().reset_index()
+                    fig_area = px.area(ts, x=date_c, y=val_cs,
+                                       color_discrete_sequence=['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24'])
+                    fig_area.update_layout(title="Aires empilées temporelles", **plotly_theme())
+                    st.plotly_chart(fig_area, use_container_width=True)
+                except Exception as e: st.error(f"Erreur : {e}")
+
+    # ── Bubble chart ──────────────────────────────────────────
+    elif viz_adv == "🔵 Bubble chart (3 variables)":
+        if len(num_cols) < 3: st.warning("Il faut au moins 3 colonnes numériques.")
+        else:
+            c1,c2,c3,c4 = st.columns(4)
+            with c1: bx = st.selectbox("Axe X", num_cols, key='bub_x')
+            with c2: by = st.selectbox("Axe Y", [c for c in num_cols if c!=bx], key='bub_y')
+            with c3: bs = st.selectbox("Taille bulle", [c for c in num_cols if c not in [bx,by]], key='bub_s')
+            with c4: bc = st.selectbox("Couleur", ["Aucune"]+cat_cols+num_cols, key='bub_c')
+            fig_bub = px.scatter(df, x=bx, y=by, size=bs, size_max=50,
+                                 color=None if bc=="Aucune" else bc, opacity=0.7,
+                                 color_discrete_sequence=['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24'],
+                                 color_continuous_scale=['#1e2230','#7c6ffd','#00e5a0'],
+                                 hover_data=df.columns.tolist()[:5])
+            fig_bub.update_layout(title=f"Bubble chart : {bx} × {by} (taille={bs})", **plotly_theme())
+            st.plotly_chart(fig_bub, use_container_width=True)
+
+    # ── Treemap ───────────────────────────────────────────────
+    elif viz_adv == "🌳 Treemap (hiérarchie)":
+        if not cat_cols or not num_cols: st.warning("Colonnes catégorielles et numériques requises.")
+        else:
+            tree_path = st.multiselect("Chemin hiérarchique (du parent à l'enfant)", cat_cols, key='tree_path')
+            tree_val  = st.selectbox("Valeur (taille)", num_cols, key='tree_val')
+            tree_col  = st.selectbox("Couleur", ["Aucune"]+num_cols+cat_cols, key='tree_col')
+            if tree_path:
+                try:
+                    fig_tree = px.treemap(df, path=tree_path, values=tree_val,
+                                          color=None if tree_col=="Aucune" else tree_col,
+                                          color_continuous_scale=['#1e2230','#7c6ffd','#00e5a0'])
+                    fig_tree.update_layout(title="Treemap hiérarchique", **plotly_theme())
+                    st.plotly_chart(fig_tree, use_container_width=True)
+                except Exception as e: st.error(f"Erreur : {e}")
+
+    # ── Sunburst ──────────────────────────────────────────────
+    elif viz_adv == "🌞 Sunburst (hiérarchie imbriquée)":
+        if not cat_cols or not num_cols: st.warning("Colonnes catégorielles et numériques requises.")
+        else:
+            sun_path = st.multiselect("Chemin hiérarchique", cat_cols, key='sun_path')
+            sun_val  = st.selectbox("Valeur", num_cols, key='sun_val')
+            if sun_path:
+                try:
+                    fig_sun = px.sunburst(df, path=sun_path, values=sun_val,
+                                          color_discrete_sequence=['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24','#38bdf8'])
+                    fig_sun.update_layout(title="Sunburst chart", **plotly_theme())
+                    st.plotly_chart(fig_sun, use_container_width=True)
+                except Exception as e: st.error(f"Erreur : {e}")
+
+    # ── Violin comparatif ─────────────────────────────────────
+    elif viz_adv == "🎻 Violin plot comparatif":
+        if not num_cols: st.warning("Aucune colonne numérique.")
+        else:
+            viol_cols = st.multiselect("Variables", num_cols, default=num_cols[:min(4,len(num_cols))], key='viol_multi')
+            viol_grp  = st.selectbox("Grouper par", ["Aucun"]+cat_cols, key='viol_grp')
+            if viol_cols:
+                if viol_grp == "Aucun":
+                    df_melt = df[viol_cols].melt(var_name='Variable', value_name='Valeur').dropna()
+                    fig_viol = px.violin(df_melt, x='Variable', y='Valeur', box=True, points="outliers",
+                                         color='Variable', color_discrete_sequence=['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24'])
+                else:
+                    fig_viol = px.violin(df, x=viol_grp, y=viol_cols[0], color=viol_grp, box=True, points="outliers",
+                                         color_discrete_sequence=['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24'])
+                fig_viol.update_layout(title="Violin plot comparatif", **plotly_theme())
+                st.plotly_chart(fig_viol, use_container_width=True)
+
+    # ── ECDF ──────────────────────────────────────────────────
+    elif viz_adv == "📉 Distribution cumulative (ECDF)":
+        if not num_cols: st.warning("Aucune colonne numérique.")
+        else:
+            ecdf_cols = st.multiselect("Variables", num_cols, default=num_cols[:min(4,len(num_cols))], key='ecdf_cols')
+            if ecdf_cols:
+                fig_ecdf = go.Figure()
+                colors_ec = ['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24','#38bdf8']
+                for i,c in enumerate(ecdf_cols):
+                    s = df[c].dropna().sort_values()
+                    ecdf = np.arange(1, len(s)+1)/len(s)
+                    fig_ecdf.add_scatter(x=s, y=ecdf, mode='lines', name=c,
+                                         line=dict(color=colors_ec[i%5], width=2))
+                fig_ecdf.add_hline(y=0.5, line_dash='dash', line_color='#6b7280', annotation_text='Médiane')
+                fig_ecdf.add_hline(y=0.25, line_dash='dot', line_color='#6b7280', annotation_text='Q1')
+                fig_ecdf.add_hline(y=0.75, line_dash='dot', line_color='#6b7280', annotation_text='Q3')
+                fig_ecdf.update_layout(title="Distribution cumulative empirique (ECDF)",
+                                       xaxis_title="Valeur", yaxis_title="Probabilité cumulée",
+                                       **plotly_theme())
+                st.plotly_chart(fig_ecdf, use_container_width=True)
+
+    # ── Heatmap temporelle ────────────────────────────────────
+    elif viz_adv == "🔥 Heatmap temporelle (calendrier)":
+        date_cands = dt_cols+[c for c in df.columns if 'date' in c.lower() or 'time' in c.lower()]
+        if not date_cands or not num_cols:
+            st.warning("Il faut une colonne date et une colonne numérique.")
+        else:
+            ht_date = st.selectbox("Colonne date", date_cands, key='ht_date')
+            ht_val  = st.selectbox("Valeur", num_cols, key='ht_val')
+            ht_x    = st.selectbox("Axe X (granularité)", ["Mois","Semaine","Trimestre","Heure"], key='ht_x')
+            ht_y    = st.selectbox("Axe Y", ["Année","Jour de la semaine","Mois"], key='ht_y')
+            try:
+                tmp = df.copy()
+                tmp[ht_date] = pd.to_datetime(tmp[ht_date], errors='coerce')
+                tmp = tmp.dropna(subset=[ht_date])
+                x_map = {"Mois":"month","Semaine":"isocalendar().week","Trimestre":"quarter","Heure":"hour"}
+                y_map = {"Année":"year","Jour de la semaine":"dayofweek","Mois":"month"}
+
+                def safe_get(col, attr):
+                    if '().' in attr:
+                        parts = attr.split('.')
+                        return getattr(getattr(col.dt, parts[0][:-2])(), parts[1]).astype(int)
+                    return getattr(col.dt, attr)
+
+                tmp['_x'] = safe_get(tmp[ht_date], x_map[ht_x])
+                tmp['_y'] = safe_get(tmp[ht_date], y_map[ht_y])
+                pivot_ht  = tmp.groupby(['_y','_x'])[ht_val].mean().unstack(fill_value=0)
+                fig_ht = px.imshow(pivot_ht, text_auto=".0f", aspect='auto',
+                                   color_continuous_scale=['#161920','#7c6ffd','#00e5a0'])
+                fig_ht.update_layout(title=f"Heatmap temporelle — {ht_val} ({ht_y} × {ht_x})", **plotly_theme())
+                st.plotly_chart(fig_ht, use_container_width=True)
+            except Exception as e: st.error(f"Erreur : {e}")
+
+    # ── Funnel ────────────────────────────────────────────────
+    elif viz_adv == "📈 Graphique en entonnoir (Funnel)":
+        if not cat_cols or not num_cols: st.warning("Colonnes catégorielles et numériques requises.")
+        else:
+            fun_cat = st.selectbox("Étapes (catégorielle)", cat_cols, key='fun_cat')
+            fun_val = st.selectbox("Valeur", num_cols, key='fun_val')
+            fun_agg = st.selectbox("Agrégation", ["sum","mean","count"], key='fun_agg')
+            fun_df  = df.groupby(fun_cat)[fun_val].agg(fun_agg).reset_index().sort_values(fun_val, ascending=False)
+            fig_fun = px.funnel(fun_df, x=fun_val, y=fun_cat,
+                                color_discrete_sequence=['#7c6ffd'])
+            fig_fun.update_layout(title=f"Entonnoir : {fun_val} par {fun_cat}", **plotly_theme())
+            st.plotly_chart(fig_fun, use_container_width=True)
+
+    # ── Radar ─────────────────────────────────────────────────
+    elif viz_adv == "🗺 Graphique radar / araignée":
+        if not num_cols: st.warning("Aucune colonne numérique.")
+        else:
+            rad_cols = st.multiselect("Variables (axes du radar)", num_cols, default=num_cols[:min(6,len(num_cols))], key='rad_cols')
+            rad_grp  = st.selectbox("Grouper par (une ligne par groupe)", ["Aucun"]+cat_cols, key='rad_grp')
+            if rad_cols:
+                if rad_grp == "Aucun":
+                    means = df[rad_cols].mean().values
+                    fig_rad = go.Figure(go.Scatterpolar(r=means, theta=rad_cols,
+                                                        fill='toself', fillcolor='rgba(0,229,160,0.2)',
+                                                        line=dict(color='#00e5a0', width=2), name='Moyenne'))
+                else:
+                    top_grps = df[rad_grp].value_counts().head(6).index.tolist()
+                    fig_rad  = go.Figure()
+                    colors_r = ['#00e5a0','#7c6ffd','#ff6b6b','#fbbf24','#38bdf8','#f472b6']
+                    for i,g in enumerate(top_grps):
+                        sub = df[df[rad_grp]==g][rad_cols].mean().values
+                        fig_rad.add_scatterpolar(r=sub, theta=rad_cols, fill='toself', name=str(g),
+                                                 line=dict(color=colors_r[i%6], width=2))
+                fig_rad.update_layout(polar=dict(bgcolor='#161920',
+                    radialaxis=dict(visible=True, gridcolor='#2a2f3d', color='#6b7280'),
+                    angularaxis=dict(gridcolor='#2a2f3d', color='#6b7280')),
+                    title="Graphique radar", paper_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='#e8eaf0'), margin=dict(t=60,b=40,l=40,r=40))
+                st.plotly_chart(fig_rad, use_container_width=True)
+
+    # ── Waterfall ─────────────────────────────────────────────
+    elif viz_adv == "📊 Waterfall / Cascade":
+        if not cat_cols or not num_cols: st.warning("Colonnes catégorielles et numériques requises.")
+        else:
+            wf_cat = st.selectbox("Catégories (étapes)", cat_cols, key='wf_cat')
+            wf_val = st.selectbox("Valeur", num_cols, key='wf_val')
+            wf_agg = st.selectbox("Agrégation", ["sum","mean"], key='wf_agg')
+            wf_df  = df.groupby(wf_cat)[wf_val].agg(wf_agg).reset_index()
+            vals   = wf_df[wf_val].values
+            colors_wf = ['#00e5a0' if v >= 0 else '#ef4444' for v in vals]
+            fig_wf = go.Figure(go.Waterfall(
+                name="", measure=["relative"]*len(vals),
+                x=wf_df[wf_cat].tolist(), y=vals,
+                connector=dict(line=dict(color='#2a2f3d')),
+                increasing=dict(marker_color='#00e5a0'),
+                decreasing=dict(marker_color='#ef4444'),
+            ))
+            fig_wf.update_layout(title=f"Waterfall : {wf_val} par {wf_cat}", **plotly_theme())
+            st.plotly_chart(fig_wf, use_container_width=True)
+
+    # ── Réseau de corrélations ────────────────────────────────
+    elif viz_adv == "🔗 Réseau de corrélations (graphe)":
+        if len(num_cols) < 3: st.warning("Il faut au moins 3 colonnes numériques.")
+        else:
+            net_cols = st.multiselect("Colonnes", num_cols, default=num_cols[:min(8,len(num_cols))], key='net_cols')
+            net_thr  = st.slider("Seuil |r| minimum", 0.1, 0.95, 0.5, key='net_thr')
+            net_meth = st.selectbox("Méthode", ["pearson","spearman"], key='net_meth')
+            if len(net_cols) >= 3:
+                corr_net = df[net_cols].corr(method=net_meth)
+                # Construire les arêtes
+                edges_x, edges_y, annotations = [], [], []
+                np.random.seed(42)
+                n = len(net_cols)
+                angles = np.linspace(0, 2*np.pi, n, endpoint=False)
+                pos = {c: (np.cos(a), np.sin(a)) for c,a in zip(net_cols, angles)}
+
+                fig_net = go.Figure()
+                for i,c1 in enumerate(net_cols):
+                    for j,c2 in enumerate(net_cols):
+                        if i < j:
+                            r = corr_net.loc[c1,c2]
+                            if abs(r) >= net_thr:
+                                x0,y0 = pos[c1]
+                                x1,y1 = pos[c2]
+                                color = '#00e5a0' if r > 0 else '#ef4444'
+                                width = abs(r)*5
+                                fig_net.add_scatter(x=[x0,x1,None], y=[y0,y1,None],
+                                                    mode='lines', line=dict(color=color, width=width),
+                                                    hoverinfo='skip', showlegend=False)
+
+                for c,(x,y) in pos.items():
+                    fig_net.add_scatter(x=[x], y=[y], mode='markers+text',
+                                        marker=dict(size=20, color='#7c6ffd', line=dict(color='#00e5a0', width=2)),
+                                        text=[c], textposition='top center',
+                                        textfont=dict(color='#e8eaf0', size=10),
+                                        name=c, showlegend=False)
+                fig_net.update_layout(title=f"Réseau de corrélations (|r| ≥ {net_thr}) — vert=positif, rouge=négatif",
+                                      xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                      yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                      **plotly_theme())
+                st.plotly_chart(fig_net, use_container_width=True)
+
+    # ── Q-Q Plot multi ────────────────────────────────────────
+    elif viz_adv == "📐 Q-Q Plot multi-variables":
+        if not num_cols: st.warning("Aucune colonne numérique.")
+        else:
+            qq_cols = st.multiselect("Variables", num_cols, default=num_cols[:min(4,len(num_cols))], key='qq_cols')
+            dist    = st.selectbox("Distribution de référence", ["norm","uniform","expon","lognorm"], key='qq_dist')
+            if qq_cols:
+                n_cols_qq = min(len(qq_cols), 2)
+                n_rows_qq = (len(qq_cols)+1)//2
+                fig_qq_m, axes = plt.subplots(n_rows_qq, n_cols_qq, figsize=(6*n_cols_qq, 4*n_rows_qq))
+                fig_qq_m.patch.set_facecolor('#0d0f14')
+                axes = np.array(axes).flatten() if len(qq_cols) > 1 else [axes]
+                for i,c in enumerate(qq_cols):
+                    ax = axes[i]
+                    ax.set_facecolor('#161920')
+                    s = df[c].dropna()
+                    stats.probplot(s, dist=dist, plot=ax)
+                    ax.get_lines()[0].set(color='#7c6ffd', markersize=3, alpha=0.6)
+                    ax.get_lines()[1].set(color='#00e5a0', linewidth=2)
+                    ax.set_title(c, color='#e8eaf0', fontsize=10)
+                    ax.tick_params(colors='#6b7280')
+                    for spine in ax.spines.values(): spine.set_color('#2a2f3d')
+                    ax.xaxis.label.set_color('#6b7280')
+                    ax.yaxis.label.set_color('#6b7280')
+                for j in range(len(qq_cols), len(axes)):
+                    axes[j].set_visible(False)
+                plt.tight_layout()
+                st.pyplot(fig_qq_m, use_container_width=True)
+
+    st.markdown('<div class="footer">DataClean Pro · <span>Grâce Delesth NGANGA</span></div>', unsafe_allow_html=True)
+
+
 # ══════════════════════════════════════════════════════════════
 elif page == "📉 Analyse bivariée":
     st.markdown('<p class="section-header">Analyse bivariée & relations entre variables</p>', unsafe_allow_html=True)
@@ -1301,7 +1964,7 @@ elif page == "📚 Guide & Glossaire":
             ("Shapiro-Wilk","Normalité","Teste si une distribution est normale.","Recommandé pour n < 5000.","H₀ : distribution normale. p<0.05 → non normale.","Le plus puissant des tests de normalité."),
         ]
         for title, tag, desc, usage, hyp, interp in tests:
-            st.markdown(f'<div class="glossary-card"><div class="glossary-tag">{tag}</div><div class="glossary-title">🧪 {title}</div><div class="glossary-body">{desc}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="glossary-card"><div class="glossary-tag">{tag}</div><div class="glossary-title"> {title}</div><div class="glossary-body">{desc}</div></div>', unsafe_allow_html=True)
             with st.expander(f"Détails — {title}"):
                 st.markdown(f"**Quand ?** {usage} | **Hypothèse :** {hyp} | **Règle :** {interp}")
 
@@ -1315,7 +1978,7 @@ elif page == "📚 Guide & Glossaire":
             ("Z-score","Mise à l'échelle","Centre et réduit (μ=0, σ=1).",["Formule : (x-μ)/σ","Pour SVM, régression","Moins sensible aux outliers que Min-Max"]),
         ]
         for title, tag, desc, bullets in techniques:
-            st.markdown(f'<div class="glossary-card"><div class="glossary-tag">{tag}</div><div class="glossary-title">🔧 {title}</div><div class="glossary-body">{desc}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="glossary-card"><div class="glossary-tag">{tag}</div><div class="glossary-title"> {title}</div><div class="glossary-body">{desc}</div></div>', unsafe_allow_html=True)
             with st.expander(f"Détails — {title}"):
                 for b in bullets: st.markdown(f"• {b}")
 
@@ -1325,7 +1988,7 @@ elif page == "📚 Guide & Glossaire":
 # ══════════════════════════════════════════════════════════════
 # PAGE 11 — COURS DATA SCIENCE  ← NOUVEAU
 # ══════════════════════════════════════════════════════════════
-elif page == "🎓 Cours Data Science":
+elif page == "🎓 Pré-requis":
     st.markdown('<p class="section-header">Résumé de cours complet — Data Analyst & Data Scientist</p>', unsafe_allow_html=True)
     st.markdown('<div class="info-box">Ce cours couvre les notions fondamentales qu\'un bon Data Analyst ou Data Scientist doit maîtriser. Chaque chapitre est un résumé dense et actionnable.</div>', unsafe_allow_html=True)
 
@@ -1344,7 +2007,7 @@ elif page == "🎓 Cours Data Science":
     ])
 
     if chapitre.startswith("1."):
-        st.markdown('<div class="course-chapter"><div class="course-title">📐 Chapitre 1 — Fondements statistiques</div><div class="course-body">La statistique est la science de la collecte, l\'analyse et de l\'interprétation des données. Deux grandes branches :</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 1 — Fondements statistiques</div><div class="course-body">La statistique est la science de la collecte, l\'analyse et de l\'interprétation des données. Deux grandes branches :</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Statistiques descriptives","Paramètres de position","Paramètres de dispersion","Forme de la distribution"])
         with tabs[0]:
             st.markdown("""
@@ -1390,7 +2053,7 @@ elif page == "🎓 Cours Data Science":
 """)
 
     elif chapitre.startswith("2."):
-        st.markdown('<div class="course-chapter"><div class="course-title">🎲 Chapitre 2 — Probabilités & Distributions</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 2 — Probabilités & Distributions</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Probabilités de base","Distributions discrètes","Distributions continues","Théorème central limite"])
         with tabs[0]:
             st.markdown("""
@@ -1446,7 +2109,7 @@ elif page == "🎓 Cours Data Science":
 """)
 
     elif chapitre.startswith("3."):
-        st.markdown('<div class="course-chapter"><div class="course-title">🧪 Chapitre 3 — Tests d\'hypothèses</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 3 — Tests d\'hypothèses</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Logique des tests","Tests paramétriques","Tests non paramétriques","Erreurs & puissance"])
         with tabs[0]:
             st.markdown("""
@@ -1508,7 +2171,7 @@ elif page == "🎓 Cours Data Science":
 """)
 
     elif chapitre.startswith("4."):
-        st.markdown('<div class="course-chapter"><div class="course-title">📈 Chapitre 4 — Régression & Modélisation</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 4 — Régression & Modélisation</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Régression linéaire simple","Régression linéaire multiple","Régression logistique","Hypothèses & diagnostics"])
         with tabs[0]:
             st.markdown('<div class="course-formula">Y = β₀ + β₁X + ε</div>', unsafe_allow_html=True)
@@ -1561,7 +2224,7 @@ elif page == "🎓 Cours Data Science":
 """)
 
     elif chapitre.startswith("5."):
-        st.markdown('<div class="course-chapter"><div class="course-title">🤖 Chapitre 5 — Machine Learning Supervisé</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 5 — Machine Learning Supervisé</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Principes généraux","Classification","Régression ML","Ensembles"])
         with tabs[0]:
             st.markdown("""
@@ -1625,7 +2288,7 @@ elif page == "🎓 Cours Data Science":
 """)
 
     elif chapitre.startswith("6."):
-        st.markdown('<div class="course-chapter"><div class="course-title">🔬 Chapitre 6 — Machine Learning Non Supervisé</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 6 — Machine Learning Non Supervisé</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Clustering","Réduction de dimension","Règles d'association","Détection d'anomalies"])
         with tabs[0]:
             st.markdown("""
@@ -1691,7 +2354,7 @@ Utilisé en : recommandation, analyse du panier d'achat, médecine.
 """)
 
     elif chapitre.startswith("7."):
-        st.markdown('<div class="course-chapter"><div class="course-title">⚙️ Chapitre 7 — Préparation & Feature Engineering</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 7 — Préparation & Feature Engineering</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Collecte & exploration","Nettoyage","Feature Engineering","Sélection de variables"])
         with tabs[0]:
             st.markdown("""
@@ -1773,7 +2436,7 @@ Utilisé en : recommandation, analyse du panier d'achat, médecine.
 """)
 
     elif chapitre.startswith("8."):
-        st.markdown('<div class="course-chapter"><div class="course-title">🎯 Chapitre 8 — Évaluation des modèles</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 8 — Évaluation des modèles</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Métriques classification","Métriques régression","Validation & généralisation","Comparaison de modèles"])
         with tabs[0]:
             st.markdown("""
@@ -1840,7 +2503,7 @@ Réel 1    →    FN (FN)      VP (TP)
             st.markdown("Le modèle avec le **plus petit AIC/BIC** est préféré.")
 
     elif chapitre.startswith("9."):
-        st.markdown('<div class="course-chapter"><div class="course-title">🗄️ Chapitre 9 — SQL & Manipulation de données</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 9 — SQL & Manipulation de données</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["SQL Fondamentaux","Jointures SQL","Agrégations","Window Functions"])
         with tabs[0]:
             st.markdown("""
@@ -1908,7 +2571,7 @@ Réel 1    →    FN (FN)      VP (TP)
 """)
 
     elif chapitre.startswith("10."):
-        st.markdown('<div class="course-chapter"><div class="course-title">📊 Chapitre 10 — Visualisation & Storytelling</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 10 — Visualisation & Storytelling</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Choisir le bon graphique","Principes de design","Storytelling data","Outils"])
         with tabs[0]:
             st.markdown("""
@@ -1987,7 +2650,7 @@ Réel 1    →    FN (FN)      VP (TP)
 """)
 
     elif chapitre.startswith("11."):
-        st.markdown('<div class="course-chapter"><div class="course-title">⚖️ Chapitre 11 — Bonnes pratiques & Éthique</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="course-chapter"><div class="course-title"> Chapitre 11 — Bonnes pratiques & Éthique</div></div>', unsafe_allow_html=True)
         tabs = st.tabs(["Bonnes pratiques ML","Biais & équité","RGPD & confidentialité","Carrière Data"])
         with tabs[0]:
             st.markdown("""
